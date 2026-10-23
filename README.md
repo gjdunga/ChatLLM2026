@@ -140,6 +140,16 @@ bash device/install_mlc_model.sh ~/storage/downloads/Llama-3.2-3B-Instruct-ablit
 
 Open MLC Chat; the new entry appears in the model list next to the built-ins.
 
+## Option B: rebuild MLC Chat from source (any model, hardened app)
+
+The side-load above is limited to the five libraries in the 2024 APK.
+[gjdunga/MLC-Chat-Rebuild2026](https://github.com/gjdunga/MLC-Chat-Rebuild2026)
+builds the whole stack from source on a laptop (`android/s25-ultra/`):
+compiler, per-model Adreno 830 libraries, runtime and a signed APK targeting
+Android 17, with runtime permissions removed, HTTPS-only downloads, backup off,
+path-traversal checks on model files, and pinned dependency checksums. It
+ships Qwen3-4B and an abliterated Qwen3-4B-Instruct-2507.
+
 ## Fallback: fully on-device, newer model (no PC)
 
 ```
