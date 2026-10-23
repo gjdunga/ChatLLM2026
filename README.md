@@ -60,7 +60,7 @@ they fail with "Model lib ... is not supported".
 [PC, x86_64 Linux / WSL2 / Colab]                [Phone]
 host/convert_abliterated_mlc.sh  ── dist/ ──>  device/install_mlc_model.sh
   download bf16 abliterated weights               (Termux + adb to 127.0.0.1,
-  quantize to q4f16_0 (CPU)                        or PC + USB adb)
+  quantize to q4f16_0 (CPU, numpy)                 or PC + USB adb)
   copy chat config + tokenizer from               install APK if absent
     mlc-ai reference build                        push weights to Android/data
   verify_layout.py: every param name,             add record to mlc-app-config.json
@@ -76,8 +76,38 @@ Conversion cannot run on the phone: MLC publishes only x86_64 Linux wheels for
 bash host/convert_abliterated_mlc.sh
 ```
 
-Produces `dist/Llama-3.2-3B-Instruct-abliterated-q4f16_0-MLC/` (about 1.7 GB)
-and exits non-zero if the layout check fails.
+Needs Python 3.12, about 12 GB of disk, about 5 GB of RAM (measured peak 4.6
+GB), and roughly 5 minutes of CPU time. Produces
+`dist/Llama-3.2-3B-Instruct-abliterated-q4f16_0-MLC/` (1.7 GB, 58 shards) and
+exits non-zero if the layout check fails.
+
+### Upstream breakage this works around (MLC nightly 0.26.dev6, Oct 2026)
+
+| Problem | Workaround in `host/` |
+|---|---|
+| Nightly wheel declares flashinfer/CUDA/datasets deps (several GB, filled the disk) | `--no-deps` plus the explicit list conversion actually imports |
+| Loaders pass a TVM `PrimType` to `numpy.astype` ("Could not convert T.float16") | `sed` unwraps it to the dtype string; idempotent |
+| `relax.build` of the CPU quantize kernel segfaults on the first tensor | `mlc_convert_np.py` swaps only `GroupQuantize.quantize_weight` for a numpy port; naming, sharding and the cache index stay MLC's own code |
+| "Stable" `mlc-ai-cpu 0.20.0` fails to load with every published `apache-tvm-ffi` | Not used |
+
+How the numpy quantizer was validated (this repo's commit, not a claim from
+upstream): the stock `Llama-3.2-3B-Instruct` was quantized with it and compared
+tensor by tensor to `mlc-ai/Llama-3.2-3B-Instruct-q4f16_0-MLC`.
+
+* All 283 parameter names, shapes and dtypes match.
+* Every `q_scale` and unquantized tensor is bit-identical. That needed TVM's
+  constant folding reproduced: `x / 7` compiles to `x * fp16(1/7)`.
+* 99.87% of 4-bit codes are identical. The rest differ by exactly one level,
+  always at a value within 0.004 of a .5 tie. The reference was most likely
+  produced on GPU with fast-math division. Reconstruction RMSE against the
+  float weights matches the reference to 5 significant digits.
+* On the abliterated model, (converted - base) projected onto
+  (abliterated - base) gives 1.001: the quantized weights carry the full
+  abliteration edit.
+
+Not verified here: actual inference on the phone. There is no Android device
+in the build environment. The first on-device run is the remaining test (see
+Failure modes).
 
 ### Step 2: move the folder to the phone
 

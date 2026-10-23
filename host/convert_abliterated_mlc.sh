@@ -5,7 +5,7 @@
 #
 # Runs on: Linux x86_64 (or WSL2, or a Colab VM). Not on the phone: MLC only
 # publishes x86_64 Linux wheels, so convert_weight cannot run in Termux.
-# Needs: python3 (3.10+), ~12 GB free disk, ~10 GB RAM, network to huggingface.co.
+# Needs: python3.12, ~12 GB free disk, ~5 GB RAM, network to huggingface.co.
 #
 # Output: ./dist/<MODEL_ID>/ ready for device/install_mlc_model.sh
 set -euo pipefail
@@ -27,13 +27,30 @@ mkdir -p "$WORK" "$DIST"
 cd "$WORK"
 
 # 1. Isolated Python env with the MLC CPU build (conversion needs no GPU).
+# Tested with Python 3.12. The "stable" mlc-ai-cpu 0.20.0 wheel is ABI-broken
+# against every published apache-tvm-ffi, so the nightly is the only option.
+PY="${PY:-python3.12}"
+command -v "$PY" >/dev/null || { echo "ERROR: need $PY (set PY=... to override)" >&2; exit 1; }
 if [ ! -x venv/bin/python ]; then
-  python3 -m venv venv
+  "$PY" -m venv venv
 fi
 venv/bin/pip install -q --upgrade pip
-venv/bin/pip install -q --pre -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
-venv/bin/pip install -q psutil fastapi uvicorn shortuuid requests tqdm safetensors huggingface_hub
+# --no-deps: the nightly declares flashinfer/CUDA/datasets deps (several GB)
+# that weight conversion never imports.
+venv/bin/pip install -q --pre --no-deps -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
+venv/bin/pip install -q apache-tvm-ffi numpy ml_dtypes psutil safetensors tqdm \
+  typing_extensions packaging scipy cloudpickle tornado shortuuid requests fastapi \
+  uvicorn pydantic tiktoken sentencepiece prompt_toolkit openai huggingface_hub
 venv/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+
+# Upstream bug in current nightlies: loaders pass a TVM PrimType to
+# numpy.astype(), which fails with "Could not convert T.float16 to a NumPy
+# dtype". Unwrap it to the plain dtype string. Idempotent; a no-op on builds
+# where mlc_param.dtype is already a string.
+MLC_PKG="$(venv/bin/python -c 'import importlib.util,os;print(os.path.dirname(importlib.util.find_spec("mlc_llm").origin))' 2>/dev/null | tail -1)"
+FIX='str(getattr(mlc_param.dtype, "dtype", mlc_param.dtype))'
+grep -rlE 'dtype=mlc_param\.dtype[,)]' "$MLC_PKG" | xargs -r sed -i -E \
+  "s/dtype=mlc_param\.dtype([,)])/dtype=${FIX}\1/g"
 
 # 2. Source (abliterated, bf16 safetensors) and reference (the exact MLC build the APK expects).
 venv/bin/hf download "$SRC_REPO" --local-dir src \
@@ -56,9 +73,12 @@ print("source dims OK (Llama 3.2 3B)")
 PY
 
 # 3. Quantize. Output layout is params_shard_*.bin + tensor-cache.json.
+# mlc_convert_np.py is `mlc_llm convert_weight` with the TVM CPU quantize
+# kernel (which segfaults on current nightlies) replaced by a numpy port.
 rm -rf conv
-venv/bin/python -m mlc_llm convert_weight src \
-  --quantization "$QUANT" --model-type llama --device cpu -o conv 2>&1 | grep -v "Warning: Cannot parse target"
+venv/bin/python -I "$HERE/mlc_convert_np.py" src \
+  --quantization "$QUANT" --model-type llama --device cpu -o conv 2>&1 \
+  | grep -v -e "Warning: Cannot parse target" -e "INFO huggingface_loader"
 
 # 4. Assemble the on-device folder.
 OUT="$DIST/$MODEL_ID"
