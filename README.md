@@ -58,7 +58,7 @@ they fail with "Model lib ... is not supported".
 
 ```
 [PC, x86_64 Linux / WSL2 / Colab]                [Phone]
-host/convert_abliterated_mlc.sh  ── dist/ ──>  device/install_mlc_model.sh
+host/convert_abliterated_mlc.sh  -- dist/ -->  device/install_mlc_model.sh
   download bf16 abliterated weights               (Termux + adb to 127.0.0.1,
   quantize to q4f16_0 (CPU, numpy)                 or PC + USB adb)
   copy chat config + tokenizer from               install APK if absent
